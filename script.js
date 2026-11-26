@@ -2,11 +2,13 @@
 const API_URL = "https://jarvis-three-psi-82.vercel.app";
 
 const statusText = document.getElementById("status");
-const messageText = document.getElementById("message");
+const chatLog = document.getElementById("chat");
 const activateButton = document.getElementById("activate");
 const stopButton = document.getElementById("stop");
+const textForm = document.getElementById("textForm");
+const textInput = document.getElementById("textInput");
 
-let recognition;
+let recognition = null;
 let listening = false;
 let busy = false;
 
@@ -16,8 +18,12 @@ function setStatus(text) {
   statusText.textContent = text;
 }
 
-function showMessage(text) {
-  messageText.textContent = text;
+function addMessage(role, text) {
+  const message = document.createElement("div");
+  message.className = `message ${role}`;
+  message.textContent = text;
+  chatLog.appendChild(message);
+  chatLog.scrollTop = chatLog.scrollHeight;
 }
 
 async function checkBackend() {
@@ -25,10 +31,9 @@ async function checkBackend() {
     const response = await fetch(`${API_URL}/api/health`);
     if (!response.ok) throw new Error("Backend unavailable");
     setStatus("SYSTEM ONLINE");
-    showMessage("J.A.R.V.I.S. systems initialized.");
   } catch (error) {
     setStatus("BACKEND OFFLINE");
-    showMessage("Unable to connect to the J.A.R.V.I.S. server.");
+    addMessage("assistant", "I cannot reach my server right now.");
   }
 }
 
@@ -46,36 +51,43 @@ async function speak(text) {
     const audioUrl = URL.createObjectURL(audioBlob);
     const audio = new Audio(audioUrl);
 
-    await new Promise((resolve, reject) => {
-      audio.onended = resolve;
-      audio.onerror = reject;
-      audio.play().catch(reject);
-    });
+    try {
+      await audio.play();
 
-    URL.revokeObjectURL(audioUrl);
+      await new Promise((resolve, reject) => {
+        audio.onended = resolve;
+        audio.onerror = reject;
+      });
+    } finally {
+      URL.revokeObjectURL(audioUrl);
+    }
   } catch (error) {
-    console.error("TTS error:", error);
-    showMessage("Voice output unavailable.");
+    console.error("Voice error:", error);
   }
 }
 
 async function askJarvis(text) {
-  if (busy || !text.trim()) return;
+  text = text.trim();
+
+  if (!text || busy) return;
 
   busy = true;
-  showMessage(`You: ${text}`);
-  setStatus("THINKING...");
 
+  addMessage("user", text);
   conversation.push({
     role: "user",
     content: text
   });
 
+  setStatus("THINKING...");
+
   try {
+    const recentMessages = conversation.slice(-12);
+
     const response = await fetch(`${API_URL}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: conversation })
+      body: JSON.stringify({ messages: recentMessages })
     });
 
     const data = await response.json();
@@ -89,28 +101,54 @@ async function askJarvis(text) {
       content: data.reply
     });
 
-    showMessage(`J.A.R.V.I.S.: ${data.reply}`);
+    // Show the answer immediately.
+    addMessage("assistant", data.reply);
     setStatus("SPEAKING...");
 
+    // Speak the answer using your existing voice service.
     await speak(data.reply);
+
     setStatus(listening ? "LISTENING..." : "SYSTEM ONLINE");
 
   } catch (error) {
-    console.error(error);
-    showMessage("I cannot reach my intelligence system right now.");
+    console.error("Chat error:", error);
+    addMessage(
+      "assistant",
+      "I'm having trouble connecting to my intelligence system."
+    );
     setStatus("CONNECTION ERROR");
-  }
+  } finally {
+    busy = false;
 
-  busy = false;
+    if (listening) {
+      startListening();
+    }
+  }
 }
 
+// Text messaging
+textForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  const text = textInput.value.trim();
+
+  if (!text || busy) return;
+
+  textInput.value = "";
+  await askJarvis(text);
+});
+
+// Voice recognition
 function setupVoiceRecognition() {
   const SpeechRecognition =
-    window.SpeechRecognition || window.webkitSpeechRecognition;
+    window.SpeechRecognition ||
+    window.webkitSpeechRecognition;
 
   if (!SpeechRecognition) {
-    setStatus("VOICE INPUT UNSUPPORTED");
-    showMessage("Please open J.A.R.V.I.S. in Chrome to try voice input.");
+    addMessage(
+      "assistant",
+      "Voice recognition is unavailable in this browser. You can still type to me."
+    );
     return false;
   }
 
@@ -120,24 +158,22 @@ function setupVoiceRecognition() {
   recognition.interimResults = false;
 
   recognition.onstart = () => {
-    listening = true;
     setStatus("LISTENING...");
-    showMessage("I'm listening, sir.");
   };
 
   recognition.onresult = async (event) => {
-    const text = event.results[0][0].transcript;
-    listening = false;
-    await askJarvis(text);
-
-    if (listening) startListening();
+    const spokenText = event.results[0][0].transcript;
+    await askJarvis(spokenText);
   };
 
   recognition.onerror = (event) => {
     console.error("Microphone error:", event.error);
-    listening = false;
-    setStatus("VOICE ERROR");
-    showMessage("I couldn't hear you. Check microphone permission and try again.");
+
+    if (event.error === "not-allowed") {
+      listening = false;
+      setStatus("MICROPHONE BLOCKED");
+      addMessage("assistant", "Please allow microphone access.");
+    }
   };
 
   recognition.onend = () => {
@@ -150,24 +186,27 @@ function setupVoiceRecognition() {
 }
 
 function startListening() {
-  if (!recognition || busy) return;
+  if (!recognition || !listening || busy) return;
 
   try {
     recognition.start();
   } catch (error) {
-    console.log("Recognition is already starting.");
+    console.log("Voice recognition is already active.");
   }
 }
 
+// Activate voice mode
 activateButton.addEventListener("click", async () => {
   if (!recognition && !setupVoiceRecognition()) return;
 
   if (!listening) {
-    await speak("Hey, sir.");
+    listening = true;
+    addMessage("assistant", "I'm listening, sir.");
     startListening();
   }
 });
 
+// Standby
 stopButton.addEventListener("click", () => {
   listening = false;
 
@@ -176,7 +215,7 @@ stopButton.addEventListener("click", () => {
   }
 
   setStatus("STANDBY");
-  showMessage("J.A.R.V.I.S. standing by.");
+  addMessage("assistant", "J.A.R.V.I.S. standing by.");
 });
 
 checkBackend();
