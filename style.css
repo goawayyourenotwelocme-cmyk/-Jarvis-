@@ -1,0 +1,128 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(circle at center, #09264a 0%, #020817 55%, #00030a 100%);
+  color: #d9f7ff;
+  font-family: Arial, sans-serif;
+  overflow-x: hidden;
+}
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-around;
+  padding: 35px 20px;
+  text-align: center;
+}
+
+header h1 {
+  color: #65dfff;
+  font-size: 30px;
+  letter-spacing: 7px;
+  text-shadow: 0 0 15px #00bfff;
+  margin-bottom: 10px;
+}
+
+#status {
+  color: #00cfff;
+  font-size: 12px;
+  letter-spacing: 4px;
+}
+
+.core {
+  width: min(75vw, 330px);
+  aspect-ratio: 1;
+  position: relative;
+  display: grid;
+  place-items: center;
+  margin: 25px 0;
+}
+
+.ring {
+  position: absolute;
+  border: 2px solid rgba(0, 191, 255, 0.7);
+  border-radius: 50%;
+  box-shadow: 0 0 15px #008cff, inset 0 0 15px #008cff;
+}
+
+.ring1 {
+  width: 100%;
+  height: 100%;
+  animation: rotate 12s linear infinite;
+  border-style: dashed;
+}
+
+.ring2 {
+  width: 78%;
+  height: 78%;
+  border-color: #45eaff;
+  animation: rotate 8s linear infinite reverse;
+}
+
+.ring3 {
+  width: 55%;
+  height: 55%;
+  border-width: 3px;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.center {
+  width: 28%;
+  height: 28%;
+  border-radius: 50%;
+  background: radial-gradient(circle, #bafaff, #00aaff 45%, #003b70);
+  box-shadow: 0 0 25px #00bfff, 0 0 65px #007bff;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.conversation {
+  width: 100%;
+  max-width: 500px;
+  min-height: 75px;
+  padding: 15px;
+  border: 1px solid rgba(0, 191, 255, 0.35);
+  border-radius: 12px;
+  background: rgba(0, 25, 55, 0.55);
+  box-shadow: 0 0 20px rgba(0, 140, 255, 0.12);
+}
+
+#message {
+  color: #c5f5ff;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+button {
+  width: 100%;
+  max-width: 300px;
+  padding: 16px;
+  margin: 8px;
+  border: 1px solid #00bfff;
+  border-radius: 8px;
+  background: rgba(0, 110, 190, 0.18);
+  color: #9beaff;
+  font-size: 13px;
+  font-weight: bold;
+  letter-spacing: 3px;
+  box-shadow: 0 0 15px rgba(0, 191, 255, 0.2);
+}
+
+button:active {
+  background: #006ca8;
+  box-shadow: 0 0 25px #00bfff;
+}
+
+@keyframes rotate {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(0.95); opacity: 0.75; }
+  50% { transform: scale(1.05); opacity: 1; }
+}
