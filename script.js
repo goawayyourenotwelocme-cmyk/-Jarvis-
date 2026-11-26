@@ -178,4 +178,4 @@ stopButton.addEventListener("click", () => {
   showMessage("J.A.R.V.I.S. standing by.");
 });
 
-checkBackend();
+checkBackend(); 
