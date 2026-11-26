@@ -26,19 +26,23 @@ const allowedOrigins = (process.env.ALLOWED_ORIGIN || "")
   .map(origin => origin.trim())
   .filter(Boolean);
 
+const frontendOrigin =
+  "https://goawayyourenotwelocme-cmyk.github.io";
+
 app.use(helmet());
 
 app.use(cors({
   origin(origin, callback) {
     if (
       !origin ||
+      origin === frontendOrigin ||
       allowedOrigins.length === 0 ||
       allowedOrigins.includes(origin)
     ) {
       return callback(null, true);
     }
 
-    callback(new Error("Origin not allowed"));
+    return callback(new Error("Origin not allowed"));
   }
 }));
 
@@ -88,7 +92,6 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// AI CHAT
 app.post("/api/chat", async (req, res, next) => {
   try {
     if (!groq) {
@@ -142,13 +145,11 @@ app.post("/api/chat", async (req, res, next) => {
       completion.choices[0]?.message?.content || "";
 
     res.json({ reply });
-
   } catch (error) {
     next(error);
   }
 });
 
-// FISH AUDIO TEXT TO SPEECH
 app.post("/api/tts", async (req, res, next) => {
   try {
     const apiKey = process.env.FISH_AUDIO_API_KEY;
@@ -194,12 +195,7 @@ app.post("/api/tts", async (req, res, next) => {
 
     if (!response.ok) {
       const details = await response.text();
-
-      console.error(
-        "Fish Audio error:",
-        response.status,
-        details
-      );
+      console.error("Fish Audio error:", response.status, details);
 
       return res.status(502).json({
         error: "Fish Audio could not generate speech."
@@ -213,13 +209,11 @@ app.post("/api/tts", async (req, res, next) => {
     res.setHeader("Content-Type", "audio/mpeg");
     res.setHeader("Content-Length", audio.length);
     res.send(audio);
-
   } catch (error) {
     next(error);
   }
 });
 
-// SPEECH TO TEXT
 app.post(
   "/api/transcribe",
   upload.single("audio"),
@@ -253,19 +247,14 @@ app.post(
       res.json({
         transcript: result.text
       });
-
     } catch (error) {
       next(error);
     }
   }
 );
 
-// ERROR HANDLER
 app.use((error, req, res, next) => {
-  console.error(
-    "Backend error:",
-    error.message
-  );
+  console.error("Backend error:", error.message);
 
   if (res.headersSent) {
     return next(error);
