@@ -1,562 +1,216 @@
 
-import "dotenv/config";
-import express from "express";
-import cors from "cors";
-import helmet from "helmet";
-import rateLimit from "express-rate-limit";
-import multer from "multer";
-import Groq, { toFile } from "groq-sdk";
+const API_URL = "https://jarvis-three-psi-82.vercel.app";
 
-const app = express();
+const statusText = document.getElementById("status");
+const chatLog = document.getElementById("chat");
+const activateButton = document.getElementById("activate");
+const stopButton = document.getElementById("stop");
+const textForm = document.getElementById("textForm");
+const textInput = document.getElementById("textInput");
 
-app.set("trust proxy", 1);
+let recognition = null;
+let listening = false;
+let busy = false;
+let currentAudio = null;
+let finishSpeech = null;
 
-const PORT = process.env.PORT || 3000;
-const GROQ_MODEL = "openai/gpt-oss-20b";
+const conversation = [];
 
-const groq = process.env.GROQ_API_KEY
-  ? new Groq({
-      apiKey: process.env.GROQ_API_KEY,
-      timeout: 60000
-    })
-  : null;
+function setStatus(text) {
+  statusText.textContent = text;
+}
 
-const allowedOrigins = (process.env.ALLOWED_ORIGIN || "")
-  .split(",")
-  .map(origin => origin.trim())
-  .filter(Boolean);
+function addMessage(role, text) {
+  const message = document.createElement("div");
+  message.className = `message ${role}`;
+  message.textContent = text;
+  chatLog.appendChild(message);
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
 
-app.use(helmet());
-
-app.use(cors({
-  origin(origin, callback) {
-    if (
-      !origin ||
-      allowedOrigins.length === 0 ||
-      allowedOrigins.includes(origin)
-    ) {
-      return callback(null, true);
-    }
-
-    callback(new Error("Origin not allowed"));
-  }
-}));
-
-app.use(express.json({ limit: "1mb" }));
-
-app.use("/api", rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 60,
-  standardHeaders: true,
-  legacyHeaders: false
-}));
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 15 * 1024 * 1024
-  }
-}));
-
-const SYSTEM_PROMPT = `
-You are J.A.R.V.I.S., an advanced personal AI assistant.
-
-Speak naturally, intelligently, calmly and confidently.
-Be concise and direct.
-Answer simple questions and greetings immediately.
-Avoid unnecessary introductions and long explanations.
-Address the user respectfully.
-Never claim to control a device unless a connected tool confirms it.
-`;
-
-app.get("/", (req, res) => {
-  res.json({
-    assistant: "J.A.R.V.I.S.",
-    status: "online"
-  });
-});
-
-app.get("/api/health", (req, res) => {
-  res.json({
-    status: "online",
-    assistant: "J.A.R.V.I.S.",
-    services: {
-      groq: Boolean(groq),
-      fishAudio: Boolean(process.env.FISH_AUDIO_API_KEY),
-      voiceConfigured: Boolean(process.env.FISH_AUDIO_MODEL_ID)
-    }
-  });
-});
-
-// AI CHAT
-app.post("/api/chat", async (req, res, next) => {
+async function checkBackend() {
   try {
-    if (!groq) {
-      return res.status(503).json({
-        error: "Groq API key is not configured."
-      });
-    }
+    const response = await fetch(`${API_URL}/api/health`);
+    if (!response.ok) throw new Error("Backend unavailable");
+    const data = await response.json();
+    if (data.status !== "online") throw new Error("Backend offline");
+    setStatus("SYSTEM ONLINE");
+  } catch (error) {
+    console.error(error);
+    setStatus("BACKEND OFFLINE");
+  }
+}
 
-    const { messages } = req.body;
+function stopSpeech() {
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio.currentTime = 0;
+  }
+  if (finishSpeech) finishSpeech();
+}
 
-    if (
-      !Array.isArray(messages) ||
-      messages.length === 0 ||
-      messages.length > 40
-    ) {
-      return res.status(400).json({
-        error: "Send between 1 and 40 messages."
-      });
-    }
+async function speak(text) {
+  try {
+    const response = await fetch(`${API_URL}/api/tts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text })
+    });
 
-    const validMessages = messages.map(message => {
-      if (
-        !message ||
-        !["user", "assistant"].includes(message.role) ||
-        typeof message.content !== "string" ||
-        message.content.length > 12000
-      ) {
-        throw new Error("Invalid message format.");
-      }
+    if (!response.ok) throw new Error("Voice unavailable");
 
-      return {
-        role: message.role,
-        content: message.content
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    currentAudio = audio;
+
+    await new Promise(resolve => {
+      let finished = false;
+
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        audio.onended = null;
+        audio.onerror = null;
+        URL.revokeObjectURL(url);
+        if (currentAudio === audio) currentAudio = null;
+        if (finishSpeech === finish) finishSpeech = null;
+        resolve();
       };
+
+      finishSpeech = finish;
+      audio.onended = finish;
+      audio.onerror = finish;
+      audio.play().catch(finish);
     });
-
-    const completion = await groq.chat.completions.create({
-      model: GROQ_MODEL,
-      messages: [
-        {
-          role: "system",
-          content: SYSTEM_PROMPT
-        },
-        ...validMessages
-      ],
-      reasoning_effort: "low",
-      temperature: 0.4,
-      max_completion_tokens: 300
-    });
-
-    const reply =
-      completion.choices[0]?.message?.content || "";
-
-    res.json({ reply });
-
   } catch (error) {
-    next(error);
+    console.error("Voice error:", error);
   }
-});
+}
 
-// FISH AUDIO TEXT TO SPEECH
-app.post("/api/tts", async (req, res, next) => {
+async function askJarvis(text) {
+  text = text.trim();
+  if (!text || busy) return;
+
+  busy = true;
+  addMessage("user", text);
+  conversation.push({ role: "user", content: text });
+  setStatus("THINKING...");
+
   try {
-    const apiKey = process.env.FISH_AUDIO_API_KEY;
-    const voiceId = process.env.FISH_AUDIO_MODEL_ID;
-
-    if (!apiKey || !voiceId) {
-      return res.status(503).json({
-        error: "Fish Audio key or voice ID is missing."
-      });
-    }
-
-    const { text } = req.body;
-
-    if (
-      typeof text !== "string" ||
-      !text.trim() ||
-      text.length > 4000
-    ) {
-      return res.status(400).json({
-        error: "Text must contain 1–4000 characters."
-      });
-    }
-
-    const response = await fetch(
-      "https://api.fish.audio/v1/tts",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          model:
-            process.env.FISH_AUDIO_TTS_MODEL ||
-            "s2.1-pro-free"
-        },
-        body: JSON.stringify({
-          text: text.trim(),
-          reference_id: voiceId,
-          format: "mp3"
-        }),
-        signal: AbortSignal.timeout(60000)
-      }
-    );
-
-    if (!response.ok) {
-      const details = await response.text();
-
-      console.error(
-        "Fish Audio error:",
-        response.status,
-        details
-      );
-
-      return res.status(502).json({
-        error: "Fish Audio could not generate speech."
-      });
-    }
-
-    const audio = Buffer.from(
-      await response.arrayBuffer()
-    );
-
-    res.setHeader("Content-Type", "audio/mpeg");
-    res.setHeader("Content-Length", audio.length);
-    res.send(audio);
-
-  } catch (error) {
-    next(error);
-  }
-});
-
-// SPEECH TO TEXT
-app.post(
-  "/api/transcribe",
-  upload.single("audio"),
-  async (req, res, next) => {
-    try {
-      if (!groq) {
-        return res.status(503).json({
-          error: "Groq API key is not configured."
-        });
-      }
-
-      if (!req.file) {
-        return res.status(400).json({
-          error: "No audio file was uploaded."
-        });
-      }
-
-      const file = await toFile(
-        req.file.buffer,
-        req.file.originalname || "recording.webm"
-      );
-
-      const result =
-        await groq.audio.transcriptions.create({
-          file,
-          model:
-            process.env.GROQ_STT_MODEL ||
-            "whisper-large-v3-turbo"
-        });
-
-      res.json({
-        transcript: result.text
-      });
-
-    } catch (error) {
-      next(error);
-    }
-  }
-);
-
-// ERROR HANDLER
-app.use((error, req, res, next) => {
-  console.error("Backend error:", error.message);
-
-  if (res.headersSent) {
-    return next(error);
-  }
-
-  res.status(error.status || 500).json({
-    error: error.message || "Internal server error."
-  });
-});
-
-app.listen(PORT, () => {
-  console.log(
-    `J.A.R.V.I.S. backend running on port ${PORT}`
-  );
-});
-
-import "dotenv/config";
-import express from "express";
-import cors from "cors";
-import helmet from "helmet";
-import rateLimit from "express-rate-limit";
-import multer from "multer";
-import Groq, { toFile } from "groq-sdk";
-
-const app = express();
-
-app.set("trust proxy", 1);
-
-const PORT = process.env.PORT || 3000;
-const GROQ_MODEL = "openai/gpt-oss-20b";
-
-const groq = process.env.GROQ_API_KEY
-  ? new Groq({
-      apiKey: process.env.GROQ_API_KEY,
-      timeout: 60000
-    })
-  : null;
-
-const allowedOrigins = (process.env.ALLOWED_ORIGIN || "")
-  .split(",")
-  .map(origin => origin.trim())
-  .filter(Boolean);
-
-app.use(helmet());
-
-app.use(cors({
-  origin(origin, callback) {
-    if (
-      !origin ||
-      allowedOrigins.length === 0 ||
-      allowedOrigins.includes(origin)
-    ) {
-      return callback(null, true);
-    }
-
-    callback(new Error("Origin not allowed"));
-  }
-}));
-
-app.use(express.json({ limit: "1mb" }));
-
-app.use("/api", rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 60,
-  standardHeaders: true,
-  legacyHeaders: false
-}));
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 15 * 1024 * 1024
-  }
-}));
-
-const SYSTEM_PROMPT = `
-You are J.A.R.V.I.S., an advanced personal AI assistant.
-
-Speak naturally, intelligently, calmly and confidently.
-Be concise and direct.
-Answer simple questions and greetings immediately.
-Avoid unnecessary introductions and long explanations.
-Address the user respectfully.
-Never claim to control a device unless a connected tool confirms it.
-`;
-
-app.get("/", (req, res) => {
-  res.json({
-    assistant: "J.A.R.V.I.S.",
-    status: "online"
-  });
-});
-
-app.get("/api/health", (req, res) => {
-  res.json({
-    status: "online",
-    assistant: "J.A.R.V.I.S.",
-    services: {
-      groq: Boolean(groq),
-      fishAudio: Boolean(process.env.FISH_AUDIO_API_KEY),
-      voiceConfigured: Boolean(process.env.FISH_AUDIO_MODEL_ID)
-    }
-  });
-});
-
-// AI CHAT
-app.post("/api/chat", async (req, res, next) => {
-  try {
-    if (!groq) {
-      return res.status(503).json({
-        error: "Groq API key is not configured."
-      });
-    }
-
-    const { messages } = req.body;
-
-    if (
-      !Array.isArray(messages) ||
-      messages.length === 0 ||
-      messages.length > 40
-    ) {
-      return res.status(400).json({
-        error: "Send between 1 and 40 messages."
-      });
-    }
-
-    const validMessages = messages.map(message => {
-      if (
-        !message ||
-        !["user", "assistant"].includes(message.role) ||
-        typeof message.content !== "string" ||
-        message.content.length > 12000
-      ) {
-        throw new Error("Invalid message format.");
-      }
-
-      return {
-        role: message.role,
-        content: message.content
-      };
+    const response = await fetch(`${API_URL}/api/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: conversation.slice(-12) })
     });
 
-    const completion = await groq.chat.completions.create({
-      model: GROQ_MODEL,
-      messages: [
-        {
-          role: "system",
-          content: SYSTEM_PROMPT
-        },
-        ...validMessages
-      ],
-      reasoning_effort: "low",
-      temperature: 0.4,
-      max_completion_tokens: 300
-    });
+    const data = await response.json();
 
-    const reply =
-      completion.choices[0]?.message?.content || "";
+    if (!response.ok || !data.reply) {
+      throw new Error(data.error || "Chat failed");
+    }
 
-    res.json({ reply });
+    conversation.push({ role: "assistant", content: data.reply });
+    addMessage("assistant", data.reply);
+
+    setStatus("SPEAKING...");
+    await speak(data.reply);
 
   } catch (error) {
-    next(error);
+    console.error(error);
+    addMessage("assistant", "I'm having trouble connecting right now.");
+    setStatus("CONNECTION ERROR");
+  } finally {
+    busy = false;
+
+    if (listening) {
+      startListening();
+    } else {
+      setStatus("SYSTEM ONLINE");
+    }
   }
+}
+
+textForm.addEventListener("submit", async event => {
+  event.preventDefault();
+
+  const text = textInput.value.trim();
+  if (!text || busy) return;
+
+  textInput.value = "";
+  await askJarvis(text);
 });
 
-// FISH AUDIO TEXT TO SPEECH
-app.post("/api/tts", async (req, res, next) => {
+function setupVoiceRecognition() {
+  const SpeechRecognition =
+    window.SpeechRecognition || window.webkitSpeechRecognition;
+
+  if (!SpeechRecognition) {
+    addMessage("assistant", "Voice recognition is unavailable. You can still type to me.");
+    return false;
+  }
+
+  recognition = new SpeechRecognition();
+  recognition.lang = "en-US";
+  recognition.continuous = false;
+  recognition.interimResults = false;
+
+  recognition.onstart = () => setStatus("LISTENING...");
+
+  recognition.onresult = async event => {
+    const spokenText = event.results[0][0].transcript;
+    await askJarvis(spokenText);
+  };
+
+  recognition.onerror = event => {
+    console.error("Microphone error:", event.error);
+
+    if (event.error === "not-allowed") {
+      listening = false;
+      setStatus("MICROPHONE BLOCKED");
+      addMessage("assistant", "Please allow microphone access.");
+    }
+  };
+
+  recognition.onend = () => {
+    if (listening && !busy) {
+      startListening();
+    }
+  };
+
+  return true;
+}
+
+function startListening() {
+  if (!recognition || !listening || busy) return;
+
   try {
-    const apiKey = process.env.FISH_AUDIO_API_KEY;
-    const voiceId = process.env.FISH_AUDIO_MODEL_ID;
-
-    if (!apiKey || !voiceId) {
-      return res.status(503).json({
-        error: "Fish Audio key or voice ID is missing."
-      });
-    }
-
-    const { text } = req.body;
-
-    if (
-      typeof text !== "string" ||
-      !text.trim() ||
-      text.length > 4000
-    ) {
-      return res.status(400).json({
-        error: "Text must contain 1–4000 characters."
-      });
-    }
-
-    const response = await fetch(
-      "https://api.fish.audio/v1/tts",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-          model:
-            process.env.FISH_AUDIO_TTS_MODEL ||
-            "s2.1-pro-free"
-        },
-        body: JSON.stringify({
-          text: text.trim(),
-          reference_id: voiceId,
-          format: "mp3"
-        }),
-        signal: AbortSignal.timeout(60000)
-      }
-    );
-
-    if (!response.ok) {
-      const details = await response.text();
-
-      console.error(
-        "Fish Audio error:",
-        response.status,
-        details
-      );
-
-      return res.status(502).json({
-        error: "Fish Audio could not generate speech."
-      });
-    }
-
-    const audio = Buffer.from(
-      await response.arrayBuffer()
-    );
-
-    res.setHeader("Content-Type", "audio/mpeg");
-    res.setHeader("Content-Length", audio.length);
-    res.send(audio);
-
+    recognition.start();
   } catch (error) {
-    next(error);
+    console.log("Recognition is already active.");
+  }
+}
+
+activateButton.addEventListener("click", () => {
+  if (!recognition && !setupVoiceRecognition()) return;
+
+  if (!listening) {
+    listening = true;
+    addMessage("assistant", "I'm listening, sir.");
+    startListening();
   }
 });
 
-// SPEECH TO TEXT
-app.post(
-  "/api/transcribe",
-  upload.single("audio"),
-  async (req, res, next) => {
-    try {
-      if (!groq) {
-        return res.status(503).json({
-          error: "Groq API key is not configured."
-        });
-      }
+stopButton.addEventListener("click", () => {
+  listening = false;
+  stopSpeech();
 
-      if (!req.file) {
-        return res.status(400).json({
-          error: "No audio file was uploaded."
-        });
-      }
-
-      const file = await toFile(
-        req.file.buffer,
-        req.file.originalname || "recording.webm"
-      );
-
-      const result =
-        await groq.audio.transcriptions.create({
-          file,
-          model:
-            process.env.GROQ_STT_MODEL ||
-            "whisper-large-v3-turbo"
-        });
-
-      res.json({
-        transcript: result.text
-      });
-
-    } catch (error) {
-      next(error);
-    }
-  }
-);
-
-// ERROR HANDLER
-app.use((error, req, res, next) => {
-  console.error("Backend error:", error.message);
-
-  if (res.headersSent) {
-    return next(error);
+  if (recognition) {
+    recognition.stop();
   }
 
-  res.status(error.status || 500).json({
-    error: error.message || "Internal server error."
-  });
+  setStatus("STANDBY");
+  addMessage("assistant", "J.A.R.V.I.S. standing by.");
 });
 
-app.listen(PORT, () => {
-  console.log(
-    `J.A.R.V.I.S. backend running on port ${PORT}`
-  );
-});
+checkBackend();
