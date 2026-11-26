@@ -11,6 +11,8 @@ const textInput = document.getElementById("textInput");
 let recognition = null;
 let listening = false;
 let busy = false;
+let currentAudio = null;
+let finishSpeech = null;
 
 const conversation = [];
 
@@ -29,11 +31,22 @@ function addMessage(role, text) {
 async function checkBackend() {
   try {
     const response = await fetch(`${API_URL}/api/health`);
-    if (!response.ok) throw new Error("Backend unavailable");
+    if (!response.ok) throw new Error("Offline");
     setStatus("SYSTEM ONLINE");
-  } catch (error) {
+  } catch {
     setStatus("BACKEND OFFLINE");
     addMessage("assistant", "I cannot reach my server right now.");
+  }
+}
+
+function stopSpeech() {
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio.currentTime = 0;
+  }
+
+  if (finishSpeech) {
+    finishSpeech();
   }
 }
 
@@ -45,22 +58,39 @@ async function speak(text) {
       body: JSON.stringify({ text })
     });
 
-    if (!response.ok) throw new Error("Voice service failed");
+    if (!response.ok) throw new Error("Voice unavailable");
 
-    const audioBlob = await response.blob();
-    const audioUrl = URL.createObjectURL(audioBlob);
-    const audio = new Audio(audioUrl);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
 
-    try {
-      await audio.play();
+    currentAudio = audio;
 
-      await new Promise((resolve, reject) => {
-        audio.onended = resolve;
-        audio.onerror = reject;
-      });
-    } finally {
-      URL.revokeObjectURL(audioUrl);
-    }
+    await new Promise(resolve => {
+      let finished = false;
+
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+
+        audio.onended = null;
+        audio.onerror = null;
+
+        URL.revokeObjectURL(url);
+
+        if (currentAudio === audio) currentAudio = null;
+        if (finishSpeech === finish) finishSpeech = null;
+
+        resolve();
+      };
+
+      finishSpeech = finish;
+      audio.onended = finish;
+      audio.onerror = finish;
+
+      audio.play().catch(finish);
+    });
+
   } catch (error) {
     console.error("Voice error:", error);
   }
@@ -72,8 +102,8 @@ async function askJarvis(text) {
   if (!text || busy) return;
 
   busy = true;
-
   addMessage("user", text);
+
   conversation.push({
     role: "user",
     content: text
@@ -82,18 +112,18 @@ async function askJarvis(text) {
   setStatus("THINKING...");
 
   try {
-    const recentMessages = conversation.slice(-12);
-
     const response = await fetch(`${API_URL}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: recentMessages })
+      body: JSON.stringify({
+        messages: conversation.slice(-12)
+      })
     });
 
     const data = await response.json();
 
     if (!response.ok || !data.reply) {
-      throw new Error(data.error || "Chat request failed");
+      throw new Error(data.error || "Chat failed");
     }
 
     conversation.push({
@@ -101,33 +131,29 @@ async function askJarvis(text) {
       content: data.reply
     });
 
-    // Show the answer immediately.
     addMessage("assistant", data.reply);
     setStatus("SPEAKING...");
 
-    // Speak the answer using your existing voice service.
     await speak(data.reply);
 
-    setStatus(listening ? "LISTENING..." : "SYSTEM ONLINE");
-
   } catch (error) {
-    console.error("Chat error:", error);
-    addMessage(
-      "assistant",
-      "I'm having trouble connecting to my intelligence system."
-    );
+    console.error(error);
+    addMessage("assistant", "I'm having trouble connecting right now.");
     setStatus("CONNECTION ERROR");
+
   } finally {
     busy = false;
 
     if (listening) {
       startListening();
+    } else {
+      setStatus("SYSTEM ONLINE");
     }
   }
 }
 
-// Text messaging
-textForm.addEventListener("submit", async (event) => {
+// Text input
+textForm.addEventListener("submit", async event => {
   event.preventDefault();
 
   const text = textInput.value.trim();
@@ -147,7 +173,7 @@ function setupVoiceRecognition() {
   if (!SpeechRecognition) {
     addMessage(
       "assistant",
-      "Voice recognition is unavailable in this browser. You can still type to me."
+      "Voice recognition is unavailable. You can still type to me."
     );
     return false;
   }
@@ -161,12 +187,12 @@ function setupVoiceRecognition() {
     setStatus("LISTENING...");
   };
 
-  recognition.onresult = async (event) => {
+  recognition.onresult = async event => {
     const spokenText = event.results[0][0].transcript;
     await askJarvis(spokenText);
   };
 
-  recognition.onerror = (event) => {
+  recognition.onerror = event => {
     console.error("Microphone error:", event.error);
 
     if (event.error === "not-allowed") {
@@ -191,13 +217,18 @@ function startListening() {
   try {
     recognition.start();
   } catch (error) {
-    console.log("Voice recognition is already active.");
+    console.log("Recognition is already active.");
   }
 }
 
-// Activate voice mode
-activateButton.addEventListener("click", async () => {
+// Activate or interrupt
+activateButton.addEventListener("click", () => {
   if (!recognition && !setupVoiceRecognition()) return;
+
+  if (busy && currentAudio) {
+    stopSpeech();
+    return;
+  }
 
   if (!listening) {
     listening = true;
@@ -209,6 +240,7 @@ activateButton.addEventListener("click", async () => {
 // Standby
 stopButton.addEventListener("click", () => {
   listening = false;
+  stopSpeech();
 
   if (recognition) {
     recognition.stop();
