@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -11,7 +12,6 @@
 </head>
 <body>
   <main class="app">
-
     <header>
       <h1>J.A.R.V.I.S.</h1>
       <p id="status">CONNECTING...</p>
@@ -31,20 +31,23 @@
     </section>
 
     <form id="textForm" class="composer">
-      <input
-        id="textInput"
-        type="text"
-        placeholder="Message J.A.R.V.I.S..."
-        autocomplete="off"
-      >
+      <input id="textInput" type="text"
+        placeholder="Message J.A.R.V.I.S..." autocomplete="off">
       <button id="sendButton" type="submit">SEND</button>
     </form>
 
     <button id="activate" type="button">ACTIVATE J.A.R.V.I.S.</button>
     <button id="stop" type="button">STANDBY</button>
-
   </main>
 
   <script src="./script.js"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("./service-worker.js")
+          .catch(error => console.error("Service worker error:", error));
+      });
+    }
+  </script>
 </body>
 </html>
