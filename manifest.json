@@ -1,12 +1,20 @@
+
 {
-  "name": "J.A.R.V.I.S.",
-  "short_name": "JARVIS",
-  "description": "Your personal AI assistant",
+  "name": "J.A.R.V.I.S. - Personal AI Assistant",
+  "short_name": "J.A.R.V.I.S.",
+  "description": "Advanced Personal AI Assistant",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#020817",
   "theme_color": "#00bfff",
-  "icons": []
+  "icons": [
+    {
+      "src": "./jarvis-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
 }
